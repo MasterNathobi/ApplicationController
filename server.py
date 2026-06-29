@@ -16,7 +16,25 @@ except ImportError:
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1
 
-app = Server("application-controller")
+_INSTRUCTIONS = """
+This server controls the local machine's mouse, keyboard, and screen via PyAutoGUI.
+
+## Displaying screenshots
+The take_screenshot tool returns a base64-encoded PNG that most clients cannot render inline.
+Always save it to disk and tell the user the path:
+  screenshot = pyautogui.screenshot()
+  screenshot.save(r"C:\\Users\\<username>\\Desktop\\screenshot.png")
+
+## General usage tips
+- Call get_screen_size or take_screenshot first to understand the screen state before acting.
+- Use sleep (0.3–1s) between actions to let the UI settle after clicks or keypresses.
+- Use take_screenshot + find_image_on_screen to locate UI elements by visual template.
+- type_text only supports ASCII. For Unicode/emoji: write to clipboard then press ['ctrl', 'v'].
+- press_key with a list = hotkey (keys held simultaneously); with a string = single keypress.
+- PyAutoGUI failsafe is enabled: moving the mouse to the top-left corner aborts automation.
+""".strip()
+
+app = Server("application-controller", instructions=_INSTRUCTIONS)
 
 
 @app.list_tools()
