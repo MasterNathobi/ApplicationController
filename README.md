@@ -4,21 +4,55 @@ An MCP server that exposes GUI automation tools to any MCP-compatible client (e.
 
 ## Tools
 
+### Screenshot & observation
 | Tool | Description |
 |---|---|
-| `take_screenshot` | Captures a screenshot and returns it as an image |
+| `take_screenshot` | Captures a full screenshot (optional `scale` to reduce size) |
+| `capture_region` | Captures a region by coordinates or `automation_id` bounding box |
 | `get_screen_size` | Returns the screen resolution |
-| `get_mouse_position` | Returns the current cursor position as (x, y) |
-| `click` | Left/right/middle click at (x, y) |
+| `get_mouse_position` | Returns current cursor position |
+| `list_windows` | Lists visible top-level windows (hwnd, title, pid, rect, isForeground) |
+
+### Mouse & keyboard
+| Tool | Description |
+|---|---|
+| `click` | Left/right/middle click at (x, y) or by `automation_id` |
 | `double_click` | Double-click at (x, y) |
 | `move_mouse` | Move cursor without clicking |
 | `drag` | Click and drag between two points |
 | `scroll` | Scroll up or down at (x, y) |
-| `type_text` | Type a string of text (ASCII characters) |
+| `type_text` | Type ASCII text (use clipboard + `press_key` for Unicode) |
 | `press_key` | Press a key or hotkey combination (e.g. `['ctrl', 'c']`) |
+
+### UIAutomation (Tier 1 — preferred over pixel clicks)
+| Tool | Description |
+|---|---|
+| `ua_dump_tree` | Dump the full control tree of a window as JSON |
+| `ua_find` | Find controls by `automationId`, name, or type |
+| `ua_invoke` | Invoke (click) a control by `automationId` — works off-screen |
+| `ua_set_value` | Set TextBox/ComboBox value via ValuePattern |
+| `ua_get_value` | Read a control's current value |
+
+### Eventful waiting (Tier 2 — replace fixed sleeps)
+| Tool | Description |
+|---|---|
+| `wait_for_window` | Block until a window appears or disappears |
+| `wait_for_element` | Block until a control becomes visible/enabled/exists |
+| `wait_input_idle` | Block until a process finishes rendering |
+
+### Window management (Tier 3)
+| Tool | Description |
+|---|---|
+| `focus_window` | Bring a window to the foreground / restore if minimised |
+
+### Quality-of-life (Tier 4)
+| Tool | Description |
+|---|---|
 | `launch_app` | Launch an `.exe` by path |
 | `sleep` | Pause for N seconds |
-| `find_image_on_screen` | Locate a template image on screen and return its centre coordinates (requires `opencv-python`) |
+| `find_image_on_screen` | Locate a template image on screen (requires `opencv-python`) |
+| `auto_dismiss_dialog` | Find a dialog by title and click a button to dismiss it |
+| `batch` | Execute multiple tool calls in one round-trip |
 
 ## Setup
 
@@ -34,11 +68,13 @@ To enable the `find_image_on_screen` tool, also install OpenCV:
 pip install opencv-python
 ```
 
-Alternatively, install everything via the package extras:
+Or install everything at once via the package extras:
 
 ```bash
 pip install ".[image-search]"
 ```
+
+> **Note:** `pywinauto` and `pywin32` are included in `requirements.txt`. They enable all UIAutomation tools (`ua_*`), window management (`list_windows`, `focus_window`, `wait_for_window`), and `wait_input_idle`. The server starts and the basic mouse/keyboard tools work without them — those tools will return a clear error message if called when the packages are absent.
 
 ### 2. Add to GitHub Copilot desktop app
 

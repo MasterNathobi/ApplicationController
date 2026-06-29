@@ -12,6 +12,8 @@ dependencies = [
     "mcp",
     "pyautogui",
     "Pillow",
+    "pywinauto",
+    "pywin32",
 ]
 
 [project.optional-dependencies]
