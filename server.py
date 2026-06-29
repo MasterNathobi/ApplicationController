@@ -7,6 +7,12 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
 
+try:
+	import cv2
+	_CV2_AVAILABLE = True
+except ImportError:
+	_CV2_AVAILABLE = False
+
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1
 
@@ -162,6 +168,47 @@ async def list_tools() -> list[types.Tool]:
 				"required": ["path"],
 			},
 		),
+		types.Tool(
+			name="get_mouse_position",
+			description="Return the current mouse cursor position as (x, y) screen coordinates.",
+			inputSchema={"type": "object", "properties": {}, "required": []},
+		),
+		types.Tool(
+			name="sleep",
+			description="Pause execution for a given number of seconds.",
+			inputSchema={
+				"type": "object",
+				"properties": {
+					"seconds": {
+						"type": "number",
+						"description": "Number of seconds to wait (can be fractional, e.g. 0.5)",
+					},
+				},
+				"required": ["seconds"],
+			},
+		),
+		types.Tool(
+			name="find_image_on_screen",
+			description=(
+				"Locate a template image on the screen and return the centre coordinates of the first match. "
+				"Requires opencv-python to be installed. "
+				"The template must be supplied as a base64-encoded PNG."
+			),
+			inputSchema={
+				"type": "object",
+				"properties": {
+					"image_base64": {
+						"type": "string",
+						"description": "Base64-encoded PNG of the image to search for",
+					},
+					"confidence": {
+						"type": "number",
+						"description": "Match confidence threshold 0–1 (default: 0.9)",
+					},
+				},
+				"required": ["image_base64"],
+			},
+		),
 	]
 
 
@@ -203,7 +250,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 		to_x = arguments["to_x"]
 		to_y = arguments["to_y"]
 		duration = arguments.get("duration", 0.5)
-		pyautogui.dragTo(to_x, to_y, duration=duration, startX=from_x, startY=from_y, mouseDownUp=True)
+		pyautogui.moveTo(from_x, from_y)
+		pyautogui.dragTo(to_x, to_y, duration=duration)
 		return [types.TextContent(type="text", text=f"Dragged from ({from_x}, {from_y}) to ({to_x}, {to_y})")]
 
 	elif name == "scroll":
@@ -217,7 +265,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 	elif name == "type_text":
 		text = arguments["text"]
 		interval = arguments.get("interval", 0.05)
-		pyautogui.typewrite(text, interval=interval)
+		pyautogui.write(text, interval=interval)
 		return [types.TextContent(type="text", text=f"Typed: {text!r}")]
 
 	elif name == "press_key":
@@ -235,6 +283,36 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 		args = arguments.get("args", [])
 		subprocess.Popen([path] + args)
 		return [types.TextContent(type="text", text=f"Launched: {path}")]
+
+	elif name == "get_mouse_position":
+		pos = pyautogui.position()
+		return [types.TextContent(type="text", text=f"Mouse position: ({pos.x}, {pos.y})")]
+
+	elif name == "sleep":
+		seconds = arguments["seconds"]
+		await asyncio.sleep(seconds)
+		return [types.TextContent(type="text", text=f"Slept for {seconds} second(s)")]
+
+	elif name == "find_image_on_screen":
+		if not _CV2_AVAILABLE:
+			return [types.TextContent(type="text", text="Error: opencv-python is not installed. Run: pip install opencv-python")]
+		import numpy as np
+		confidence = arguments.get("confidence", 0.9)
+		image_bytes = base64.standard_b64decode(arguments["image_base64"])
+		template_array = np.frombuffer(image_bytes, dtype=np.uint8)
+		template = cv2.imdecode(template_array, cv2.IMREAD_COLOR)
+		if template is None:
+			return [types.TextContent(type="text", text="Error: could not decode the provided image")]
+		screenshot = pyautogui.screenshot()
+		screen = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+		result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+		_, max_val, _, max_loc = cv2.minMaxLoc(result)
+		if max_val < confidence:
+			return [types.TextContent(type="text", text=f"Image not found on screen (best match confidence: {max_val:.3f})")]
+		th, tw = template.shape[:2]
+		cx = max_loc[0] + tw // 2
+		cy = max_loc[1] + th // 2
+		return [types.TextContent(type="text", text=f"Found at centre ({cx}, {cy}) with confidence {max_val:.3f}")]
 
 	else:
 		return [types.TextContent(type="text", text=f"Unknown tool: {name}")]

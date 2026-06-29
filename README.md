@@ -8,14 +8,17 @@ An MCP server that exposes GUI automation tools to any MCP-compatible client (e.
 |---|---|
 | `take_screenshot` | Captures a screenshot and returns it as an image |
 | `get_screen_size` | Returns the screen resolution |
+| `get_mouse_position` | Returns the current cursor position as (x, y) |
 | `click` | Left/right/middle click at (x, y) |
 | `double_click` | Double-click at (x, y) |
 | `move_mouse` | Move cursor without clicking |
 | `drag` | Click and drag between two points |
 | `scroll` | Scroll up or down at (x, y) |
-| `type_text` | Type a string of text |
+| `type_text` | Type a string of text (ASCII characters) |
 | `press_key` | Press a key or hotkey combination (e.g. `['ctrl', 'c']`) |
 | `launch_app` | Launch an `.exe` by path |
+| `sleep` | Pause for N seconds |
+| `find_image_on_screen` | Locate a template image on screen and return its centre coordinates (requires `opencv-python`) |
 
 ## Setup
 
@@ -23,6 +26,18 @@ An MCP server that exposes GUI automation tools to any MCP-compatible client (e.
 
 ```bash
 pip install -r requirements.txt
+```
+
+To enable the `find_image_on_screen` tool, also install OpenCV:
+
+```bash
+pip install opencv-python
+```
+
+Alternatively, install everything via the package extras:
+
+```bash
+pip install ".[image-search]"
 ```
 
 ### 2. Add to GitHub Copilot desktop app

@@ -1,3 +1,5 @@
 mcp
 pyautogui
 Pillow
+# Optional: install opencv-python to enable the find_image_on_screen tool
+# opencv-python
