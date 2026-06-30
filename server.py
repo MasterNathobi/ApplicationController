@@ -121,6 +121,15 @@ def _uia_find_all(automation_id=None, name=None, control_type=None, scope_window
 		criteria["auto_id"] = automation_id
 	if name:
 		criteria["title"] = name
+	# control_type may be a string or a list; handle list by running multiple queries
+	if isinstance(control_type, list):
+		results = []
+		for ct in control_type:
+			results.extend(_uia_find_all(
+				automation_id=automation_id, name=name, control_type=ct,
+				scope_window=scope_window, pid=pid,
+			))
+		return results
 	if control_type:
 		criteria["control_type"] = control_type
 	if not criteria:
@@ -227,15 +236,66 @@ def _list_windows_impl(pid=None):
 	win32gui.EnumWindows(cb, None)
 	return result
 
+def _invoke_elem(elem):
+	"""
+	Invoke a UIAutomation element using the most appropriate pattern.
+	Returns (pattern_used, post_state_dict).
+	"""
+	ct = (elem.friendly_class_name() or "").lower()
+	# TabItem / ListItem / RadioButton → SelectionItem pattern
+	if ct in ("tabitem", "listitem", "radiobutton", "treeitem"):
+		try:
+			elem.select()
+			is_selected = True
+			try:
+				is_selected = elem.get_toggle_state() is not None or True
+			except Exception:
+				pass
+			return "SelectionItem", {"IsSelected": True}
+		except Exception:
+			pass
+	# CheckBox → Toggle pattern
+	if ct == "checkbox":
+		try:
+			state_before = elem.get_toggle_state()
+			elem.toggle()
+			state_after = elem.get_toggle_state()
+			return "Toggle", {"ToggleState": str(state_after)}
+		except Exception:
+			pass
+	# ComboBox / TreeItem with expand → ExpandCollapse pattern
+	if ct in ("combobox", "splitbutton"):
+		try:
+			elem.expand()
+			return "ExpandCollapse", {"Expanded": True}
+		except Exception:
+			pass
+	# Default → Invoke pattern, fallback to click
+	try:
+		elem.invoke()
+		return "Invoke", {}
+	except Exception:
+		elem.click_input()
+		return "click_input", {}
+
 def _png_response(img: Image.Image, scale: float = 1.0) -> types.ImageContent:
+	return _image_response(img, scale=scale)
+
+def _image_response(img: Image.Image, scale: float = 1.0, fmt: str = "png", quality: int = 75) -> types.ImageContent:
 	if scale != 1.0:
 		w = max(1, int(img.width * scale))
 		h = max(1, int(img.height * scale))
 		img = img.resize((w, h), Image.LANCZOS)
 	buf = io.BytesIO()
-	img.save(buf, format="PNG")
+	if fmt.upper() == "JPEG":
+		img = img.convert("RGB")
+		img.save(buf, format="JPEG", quality=quality)
+		mime = "image/jpeg"
+	else:
+		img.save(buf, format="PNG")
+		mime = "image/png"
 	encoded = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-	return types.ImageContent(type="image", mimeType="image/png", data=encoded)
+	return types.ImageContent(type="image", mimeType=mime, data=encoded)
 
 
 # =============================================================================
@@ -252,7 +312,9 @@ async def list_tools() -> list[types.Tool]:
 			inputSchema={
 				"type": "object",
 				"properties": {
-					"scale": {"type": "number", "description": "Resize factor 0-1 to reduce image size (default: 1.0)"},
+					"scale": {"type": "number", "description": "Resize factor 0-1 to reduce image size (default: 0.5)"},
+					"format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format (default: png). Use jpeg for smaller payloads when pixel-perfect accuracy is not needed."},
+					"quality": {"type": "integer", "description": "JPEG quality 1-95 (default: 75, ignored for png)"},
 				},
 				"required": [],
 			},
@@ -273,7 +335,9 @@ async def list_tools() -> list[types.Tool]:
 					"h": {"type": "integer", "description": "Height"},
 					"automation_id": {"type": "string", "description": "Capture the bounding box of this control instead of x/y/w/h"},
 					"scope_window": {"type": "string", "description": "Window title to scope the automation_id search"},
-					"scale": {"type": "number", "description": "Resize factor 0-1 (default: 1.0)"},
+					"scale": {"type": "number", "description": "Resize factor 0-1 (default: 0.5)"},
+					"format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format (default: png)"},
+					"quality": {"type": "integer", "description": "JPEG quality 1-95 (default: 75, ignored for png)"},
 				},
 				"required": [],
 			},
@@ -455,14 +519,20 @@ async def list_tools() -> list[types.Tool]:
 			name="ua_find",
 			description=(
 				"Find UIAutomation controls matching given criteria anywhere on the desktop (or scoped to a window). "
-				"Returns list with rect, state, value for each match."
+				"Returns list with rect, state, value for each match. "
+				"control_type accepts a single type or a list of types (e.g. ['Button', 'CheckBox'])."
 			),
 			inputSchema={
 				"type": "object",
 				"properties": {
 					"automation_id": {"type": "string", "description": "AutomationId to match (maps to x:Name in WPF)"},
 					"name": {"type": "string", "description": "Control name/title to match"},
-					"control_type": {"type": "string", "description": "Control type, e.g. Button, Edit, ComboBox, CheckBox"},
+					"control_type": {
+						"oneOf": [
+							{"type": "string", "description": "Single control type, e.g. Button, Edit, TabItem, CheckBox"},
+							{"type": "array", "items": {"type": "string"}, "description": "Multiple control types to match any of"},
+						]
+					},
 					"scope_window": {"type": "string", "description": "Limit search to this window title"},
 					"pid": {"type": "integer", "description": "Limit search to this process ID"},
 				},
@@ -473,8 +543,10 @@ async def list_tools() -> list[types.Tool]:
 			name="ua_invoke",
 			description=(
 				"Invoke (click/activate) a UIAutomation control by automationId or name. "
-				"Uses the UIAutomation Invoke pattern - works even when the control is off-screen. "
-				"Returns the foreground window title after invocation."
+				"Automatically selects the correct UIA pattern: "
+				"SelectionItem for TabItem/ListItem/RadioButton, Toggle for CheckBox, "
+				"ExpandCollapse for ComboBox, Invoke for Button/MenuItem (fallback to click). "
+				"Returns {success, pattern_used, post_state, foreground_window}."
 			),
 			inputSchema={
 				"type": "object",
@@ -603,15 +675,19 @@ async def list_tools() -> list[types.Tool]:
 			name="auto_dismiss_dialog",
 			description=(
 				"Find a dialog window by title and click a button to dismiss it in one call. "
-				"Use for expected popups such as confirmation dialogs or dev-mode warnings."
+				"Polls until the dialog appears (up to wait_timeout seconds) so callers don't need a separate wait_for_window. "
+				"Use hwnd to target a specific window directly. "
+				"Returns structured result: {success, window_title, button_clicked, error_reason}."
 			),
 			inputSchema={
 				"type": "object",
 				"properties": {
 					"title": {"type": "string", "description": "Dialog window title (partial match, case-insensitive)"},
 					"button": {"type": "string", "description": "Button text to click (e.g. 'OK', 'Yes', 'Cancel')"},
+					"hwnd": {"type": "integer", "description": "Window handle — bypasses title search when provided"},
+					"wait_timeout": {"type": "number", "description": "Seconds to wait for the dialog to appear (default: 0 — no wait)"},
 				},
-				"required": ["title", "button"],
+				"required": ["button"],
 			},
 		),
 		types.Tool(
@@ -653,10 +729,17 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 	# -- Screenshot / screen --------------------------------------------------
 	if name == "take_screenshot":
 		screenshot = pyautogui.screenshot()
-		return [_png_response(screenshot, arguments.get("scale", 1.0))]
+		return [_image_response(
+			screenshot,
+			scale=arguments.get("scale", 0.5),
+			fmt=arguments.get("format", "png"),
+			quality=arguments.get("quality", 75),
+		)]
 
 	elif name == "capture_region":
-		scale = arguments.get("scale", 1.0)
+		scale = arguments.get("scale", 0.5)
+		fmt = arguments.get("format", "png")
+		quality = arguments.get("quality", 75)
 		if "automation_id" in arguments:
 			_require_pywinauto()
 			elem = _uia_first(
@@ -672,7 +755,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 			h = arguments["h"]
 		screenshot = pyautogui.screenshot()
 		region = screenshot.crop((x, y, x + w, y + h))
-		return [_png_response(region, scale)]
+		return [_image_response(region, scale=scale, fmt=fmt, quality=quality)]
 
 	elif name == "get_screen_size":
 		w, h = pyautogui.size()
@@ -825,11 +908,17 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 			pid=arguments.get("pid"),
 		)
 		try:
-			elem.invoke()
-		except Exception:
-			elem.click_input()
-		info = _foreground_info()
-		return [types.TextContent(type="text", text=f"Invoked. Foreground: '{info.get('foreground_window_title', 'unknown')}'")]
+			pattern_used, post_state = _invoke_elem(elem)
+			info = _foreground_info()
+			result = {
+				"success": True,
+				"pattern_used": pattern_used,
+				"post_state": post_state,
+				"foreground_window": info.get("foreground_window_title", "unknown"),
+			}
+		except Exception as e:
+			result = {"success": False, "error": str(e)}
+		return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 	elif name == "ua_set_value":
 		_require_pywinauto()
@@ -963,21 +1052,60 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent | type
 	# -- Quality-of-life - Tier 4 ---------------------------------------------
 	elif name == "auto_dismiss_dialog":
 		_require_pywinauto()
-		title = arguments["title"]
+		_require_win32()
+		title = arguments.get("title", "")
 		button_text = arguments["button"]
-		target = None
-		for win in Desktop(backend="uia").windows():
-			if title.lower() in win.window_text().lower():
-				target = win
+		hwnd = arguments.get("hwnd")
+		wait_timeout = arguments.get("wait_timeout", 0)
+		loop = asyncio.get_running_loop()
+		deadline = loop.time() + max(wait_timeout, 0)
+
+		# Poll until the dialog is visible (respects wait_timeout)
+		target_hwnd = None
+		while True:
+			if hwnd:
+				# Validate the provided hwnd is still visible
+				if win32gui.IsWindowVisible(hwnd):
+					target_hwnd = hwnd
+			else:
+				windows = _list_windows_impl()
+				for w in windows:
+					if title and title.lower() in w["title"].lower():
+						target_hwnd = w["hwnd"]
+						break
+			if target_hwnd or loop.time() >= deadline:
 				break
-		if not target:
-			return [types.TextContent(type="text", text=f"Dialog not found: '{title}'")]
-		btn = target.child_window(title=button_text, control_type="Button")
+			await asyncio.sleep(0.2)
+
+		if not target_hwnd:
+			return [types.TextContent(type="text", text=json.dumps({
+				"success": False,
+				"error_reason": "no_window_match",
+				"detail": f"No visible window matching title='{title}'" + (f" after {wait_timeout}s" if wait_timeout else ""),
+			}))]
+
+		actual_title = win32gui.GetWindowText(target_hwnd)
+
+		# Find and click the button via UIAutomation
 		try:
-			btn.invoke()
-		except Exception:
-			btn.click_input()
-		return [types.TextContent(type="text", text=f"Dismissed dialog '{title}' via button '{button_text}'")]
+			win_wrapper = Desktop(backend="uia").window(handle=target_hwnd)
+			btn = win_wrapper.child_window(title=button_text, control_type="Button")
+			try:
+				btn.invoke()
+			except Exception:
+				btn.click_input()
+			return [types.TextContent(type="text", text=json.dumps({
+				"success": True,
+				"window_title": actual_title,
+				"button_clicked": button_text,
+			}))]
+		except Exception as e:
+			return [types.TextContent(type="text", text=json.dumps({
+				"success": False,
+				"error_reason": "no_button_match",
+				"window_title": actual_title,
+				"detail": str(e),
+			}))]
 
 	elif name == "batch":
 		steps = arguments["steps"]
