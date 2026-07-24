@@ -1,0 +1,25 @@
+{
+  "iterations": 1,
+  "before": {
+    "launch_and_dialog_seconds": 8.421,
+    "open_target_window_seconds": 6.181,
+    "wait_ready_and_read_seconds": 3.95,
+    "totals": {
+      "total_seconds": 18.552,
+      "total_retries": 7
+    }
+  },
+  "after": {
+    "launch_and_dialog_seconds": 4.31,
+    "open_target_window_seconds": 2.741,
+    "wait_ready_and_read_seconds": 1.63,
+    "totals": {
+      "total_seconds": 8.681,
+      "total_retries": 0
+    }
+  },
+  "delta": {
+    "seconds_saved": 9.871,
+    "retry_reduction": 7
+  }
+}
